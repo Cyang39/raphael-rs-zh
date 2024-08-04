@@ -71,34 +71,36 @@ fn test_simple() {
     }
 }
 
-#[test]
-fn test_short_quality_opener() {
-    let actions = [Action::Reflect];
-    let state = SimulationState::from_macro(&SETTINGS, &actions);
-    if let Ok(state) = state {
-        assert_eq!(guaranteed_quality(SETTINGS, &actions).unwrap(), 300);
-        assert_eq!(state.get_quality(), 300);
-    } else {
-        panic!("Unexpected err: {}", state.err().unwrap());
-    }
-}
+// [CNServer] CN Server's Reflect is 6.x version, will not pass this
+// #[test]
+// fn test_short_quality_opener() {
+//     let actions = [Action::Reflect];
+//     let state = SimulationState::from_macro(&SETTINGS, &actions);
+//     if let Ok(state) = state {
+//         assert_eq!(guaranteed_quality(SETTINGS, &actions).unwrap(), 300);
+//         assert_eq!(state.get_quality(), 300);
+//     } else {
+//         panic!("Unexpected err: {}", state.err().unwrap());
+//     }
+// }
 
-#[test]
-fn test_long_quality_opener() {
-    let actions = [
-        Action::Reflect,
-        Action::PreparatoryTouch,
-        Action::PreparatoryTouch,
-        Action::PreparatoryTouch,
-    ];
-    let state = SimulationState::from_macro(&SETTINGS, &actions);
-    if let Ok(state) = state {
-        assert_eq!(guaranteed_quality(SETTINGS, &actions).unwrap(), 1140);
-        assert_eq!(state.get_quality(), 1140);
-    } else {
-        panic!("Unexpected err: {}", state.err().unwrap());
-    }
-}
+// [CNServer] CN Server's Reflect is 6.x version, will not pass this
+// #[test]
+// fn test_long_quality_opener() {
+//     let actions = [
+//         Action::Reflect,
+//         Action::PreparatoryTouch,
+//         Action::PreparatoryTouch,
+//         Action::PreparatoryTouch,
+//     ];
+//     let state = SimulationState::from_macro(&SETTINGS, &actions);
+//     if let Ok(state) = state {
+//         assert_eq!(guaranteed_quality(SETTINGS, &actions).unwrap(), 1140);
+//         assert_eq!(state.get_quality(), 1140);
+//     } else {
+//         panic!("Unexpected err: {}", state.err().unwrap());
+//     }
+// }
 
 #[test]
 fn test_alternating_quality_actions() {
@@ -184,36 +186,37 @@ fn test_dp() {
     }
 }
 
-#[test]
-fn test_long_sequence() {
-    let actions = [
-        Action::Reflect,
-        Action::Manipulation,
-        Action::Innovation,
-        Action::WasteNot2,
-        Action::BasicTouch,
-        Action::ComboStandardTouch,
-        Action::PreparatoryTouch,
-        Action::Veneration,
-        Action::DelicateSynthesis,
-        Action::Groundwork,
-        Action::Groundwork,
-        Action::Groundwork,
-        Action::Innovation,
-        Action::BasicTouch,
-        Action::ComboStandardTouch,
-        Action::ComboAdvancedTouch,
-        Action::ByregotsBlessing,
-        Action::CarefulSynthesis,
-    ];
-    let state = SimulationState::from_macro(&SETTINGS, &actions);
-    if let Ok(state) = state {
-        assert_eq!(guaranteed_quality(SETTINGS, &actions).unwrap(), 2924);
-        assert_eq!(state.get_quality(), 2924);
-    } else {
-        panic!("Unexpected err: {}", state.err().unwrap());
-    }
-}
+// [CNServer] CN Server's Reflect is 6.x version, will not pass this
+// #[test]
+// fn test_long_sequence() {
+//     let actions = [
+//         Action::Reflect,
+//         Action::Manipulation,
+//         Action::Innovation,
+//         Action::WasteNot2,
+//         Action::BasicTouch,
+//         Action::ComboStandardTouch,
+//         Action::PreparatoryTouch,
+//         Action::Veneration,
+//         Action::DelicateSynthesis,
+//         Action::Groundwork,
+//         Action::Groundwork,
+//         Action::Groundwork,
+//         Action::Innovation,
+//         Action::BasicTouch,
+//         Action::ComboStandardTouch,
+//         Action::ComboAdvancedTouch,
+//         Action::ByregotsBlessing,
+//         Action::CarefulSynthesis,
+//     ];
+//     let state = SimulationState::from_macro(&SETTINGS, &actions);
+//     if let Ok(state) = state {
+//         assert_eq!(guaranteed_quality(SETTINGS, &actions).unwrap(), 2924);
+//         assert_eq!(state.get_quality(), 2924);
+//     } else {
+//         panic!("Unexpected err: {}", state.err().unwrap());
+//     }
+// }
 
 #[test]
 /// Test random all possible sequences of Observe and PrudentTouch of a certain length
