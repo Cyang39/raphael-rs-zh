@@ -8,7 +8,7 @@ export RANDOM_SUFFIX="-$(echo $RANDOM$RANDOM | md5sum | head -c 8)"
 
 # Base URL used to fetch assets
 if [ "$CF_PAGES_BRANCH" == "main" ]; then
-    export BASE_URL="https://www.raphael-xiv.com"
+    export BASE_URL="https://raphael.hqy.life"
 else
     export BASE_URL=$CF_PAGES_URL
 fi
