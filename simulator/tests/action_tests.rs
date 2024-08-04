@@ -62,9 +62,10 @@ fn test_advanced_touch_combo() {
         ],
     );
     assert!(matches!(state, Ok(_)));
-    let state =
-        SimulationState::from_macro(&SETTINGS, &[Action::Observe, Action::ComboAdvancedTouch]);
-    assert!(matches!(state, Ok(_)));
+    // 7.0
+    // let state =
+    //     SimulationState::from_macro(&SETTINGS, &[Action::Observe, Action::ComboAdvancedTouch]);
+    // assert!(matches!(state, Ok(_)));
     let state = SimulationState::from_macro(&SETTINGS, &[Action::ComboAdvancedTouch]);
     assert!(matches!(state, Err("Combo requirement not fulfilled")));
 }
