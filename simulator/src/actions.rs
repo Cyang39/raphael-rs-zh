@@ -65,8 +65,10 @@ impl Action {
             Action::CarefulSynthesis => 62,
             Action::Manipulation => 65,
             Action::PrudentTouch => 66,
-            Action::AdvancedTouch => 68,
-            Action::ComboAdvancedTouch => 68,
+            // Action::AdvancedTouch => 68, // 7.0
+            // Action::ComboAdvancedTouch => 68, // 7.0
+            Action::AdvancedTouch => 84,
+            Action::ComboAdvancedTouch => 84,
             Action::Reflect => 69,
             Action::PreparatoryTouch => 71,
             Action::Groundwork => 72,
@@ -260,7 +262,8 @@ impl Action {
             Action::ComboStandardTouch => 125,
             Action::PreciseTouch => 150,
             Action::PrudentTouch => 100,
-            Action::Reflect => 300,
+            // Action::Reflect => 300,
+            Action::Reflect => 100, // before 7.0
             Action::PreparatoryTouch => 200,
             Action::DelicateSynthesis => 100,
             Action::AdvancedTouch => 150,
@@ -323,7 +326,7 @@ impl Action {
             Action::BasicTouch => Some(ComboAction::BasicTouch),
             Action::ComboStandardTouch => Some(ComboAction::StandardTouch),
             // Observe and StandardTouch unlock the same action (ComboAdvancedTouch)
-            Action::Observe => Some(ComboAction::StandardTouch),
+            // Action::Observe => Some(ComboAction::StandardTouch), // 7.0
             _ => None,
         }
     }

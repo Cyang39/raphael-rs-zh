@@ -93,7 +93,7 @@ impl MacroSolverApp {
         };
 
         Self {
-            locale: load(cc, "LOCALE", Locale::EN),
+            locale: load(cc, "LOCALE", Locale::ZH),
             recipe_config: load(cc, "RECIPE_CONFIG", default_recipe_config),
             selected_food: load(cc, "SELECTED_FOOD", None),
             selected_potion: load(cc, "SELECTED_POTION", None),
@@ -184,6 +184,11 @@ impl eframe::App for MacroSolverApp {
                             Locale::JP,
                             format!("{}", Locale::JP),
                         );
+                        ui.selectable_value(
+                            &mut self.locale,
+                            Locale::ZH,
+                            format!("{}", Locale::ZH),
+                        );
                     });
 
                 egui::widgets::global_dark_light_mode_buttons(ui);
@@ -193,7 +198,7 @@ impl eframe::App for MacroSolverApp {
                             "{} View source on GitHub",
                             egui::special_emojis::GITHUB
                         )),
-                        "https://github.com/KonaeAkira/raphael-rs",
+                        "https://github.com/Cyang39/raphael-rs-zh",
                     )
                     .open_in_new_tab(true),
                 );
@@ -625,6 +630,22 @@ impl MacroSolverApp {
             .get_mut(&FontFamily::Monospace)
             .unwrap()
             .push("japanese_monospace".to_owned());
+        fonts.font_data.insert(
+            String::from("chinese_monospace"),
+            FontData::from_static(include_bytes!(
+                "../assets/fonts/MiSans-Regular.ttf"
+            ))
+        );
+        fonts
+            .families
+            .get_mut(&FontFamily::Proportional)
+            .unwrap()
+            .push("chinese_monospace".to_owned());
+        fonts
+            .families
+            .get_mut(&FontFamily::Monospace)
+            .unwrap()
+            .push("chinese_monospace".to_owned());
         ctx.set_fonts(fonts);
     }
 }

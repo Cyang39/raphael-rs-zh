@@ -1,3 +1,13 @@
+# 汉化说明
+
+:link: [raphael.hqy.life](https://raphael.hqy.life/)
+
+1. 中文字体使用 [MiSans](https://hyperos.mi.com/font/zh/)；
+2. 原应用已经支持 7.0，技能参数按照国服调整回 6.x，删除的[注视制作](https://ff14.huijiwiki.com/wiki/Action:100238)和[注视加工](https://ff14.huijiwiki.com/wiki/Action:100246)未添加回；
+3. 物品数据来源 [ffxiv-datamining-cn](https://github.com/thewakingsands/ffxiv-datamining-cn)，国服没有的物品显示日文。
+
+<hr>
+
 # Raphael XIV [<img src="https://img.shields.io/discord/1244140502643904522?logo=discord&logoColor=white"/>](https://discord.com/invite/m2aCy3y8he)
 
 :link: [www.raphael-xiv.com](https://www.raphael-xiv.com/)

@@ -7,6 +7,7 @@ pub enum Locale {
     DE,
     FR,
     JP,
+    ZH,
 }
 
 impl std::fmt::Display for Locale {
@@ -16,6 +17,7 @@ impl std::fmt::Display for Locale {
             Self::DE => write!(f, "Deutsch"),
             Self::FR => write!(f, "Français"),
             Self::JP => write!(f, "日本語"),
+            Self::ZH => write!(f, "简体中文"),
         }
     }
 }
@@ -23,6 +25,7 @@ impl std::fmt::Display for Locale {
 const JOB_NAMES_EN: [&str; 8] = ["CRP", "BSM", "ARM", "GSM", "LTW", "WVR", "ALC", "CUL"];
 const JOB_NAMES_DE: [&str; 8] = ["ZMR", "GRS", "PLA", "GLD", "GER", "WEB", "ALC", "GRM"];
 const JOB_NAMES_FR: [&str; 8] = ["MEN", "FRG", "ARM", "ORF", "TAN", "COU", "ALC", "CUI"];
+const JOB_NAMES_ZH: [&str; 8] = ["刻木", "锻铁", "铸甲", "雕金", "制革", "裁衣", "炼金", "烹调"];
 
 pub fn get_job_name(job_id: u8, locale: Locale) -> &'static str {
     match locale {
@@ -30,6 +33,7 @@ pub fn get_job_name(job_id: u8, locale: Locale) -> &'static str {
         Locale::DE => JOB_NAMES_DE[job_id as usize],
         Locale::FR => JOB_NAMES_FR[job_id as usize],
         Locale::JP => JOB_NAMES_EN[job_id as usize], // JP job abbreviations are the same as EN
+        Locale::ZH => JOB_NAMES_ZH[job_id as usize],
     }
 }
 
@@ -41,6 +45,8 @@ static ITEM_NAMES_FR: phf::Map<u32, &'static str> =
     include!(concat!(env!("OUT_DIR"), "/item_names_fr.rs"));
 static ITEM_NAMES_JP: phf::Map<u32, &'static str> =
     include!(concat!(env!("OUT_DIR"), "/item_names_jp.rs"));
+static ITEM_NAMES_ZH: phf::Map<u32, &'static str> =
+    include!(concat!(env!("OUT_DIR"), "/item_names_zh.rs"));
 
 pub fn get_item_name(item_id: u32, hq: bool, locale: Locale) -> String {
     let item_name = match locale {
@@ -60,6 +66,10 @@ pub fn get_item_name(item_id: u32, hq: bool, locale: Locale) -> String {
             .get(&item_id)
             .copied()
             .unwrap_or("Unknown item"),
+        Locale::ZH => ITEM_NAMES_ZH
+            .get(&item_id)
+            .copied()
+            .unwrap_or("Unknown item"),
     };
     match hq {
         true => format!("{} (HQ)", item_name),
@@ -73,6 +83,7 @@ pub const fn action_name(action: Action, locale: Locale) -> &'static str {
         Locale::DE => action_name_de(action),
         Locale::FR => action_name_fr(action),
         Locale::JP => action_name_jp(action),
+        Locale::ZH => action_name_zh(action),
     }
 }
 
@@ -213,5 +224,40 @@ const fn action_name_jp(action: Action) -> &'static str {
         Action::TrainedPerfection => "匠の絶技",
         Action::TrainedEye => "匠の早業",
         Action::QuickInnovation => "クイックイノベーション",
+    }
+}
+
+const fn action_name_zh(action: Action) -> &'static str {
+    match action {
+        Action::BasicSynthesis => "制作",
+        Action::BasicTouch => "加工",
+        Action::MasterMend => "精修",
+        Action::Observe => "观察",
+        Action::WasteNot => "俭约",
+        Action::Veneration => "崇敬",
+        Action::StandardTouch | Action::ComboStandardTouch => "中级加工",
+        Action::GreatStrides => "阔步",
+        Action::Innovation => "改革",
+        Action::WasteNot2 => "长期俭约",
+        Action::ByregotsBlessing => "比尔格的祝福",
+        Action::PreciseTouch => "集中加工",
+        Action::MuscleMemory => "坚信",
+        Action::CarefulSynthesis => "模范制作",
+        Action::Manipulation => "掌握",
+        Action::PrudentTouch => "俭约加工",
+        Action::AdvancedTouch | Action::ComboAdvancedTouch => "上级加工",
+        Action::Reflect => "闲静",
+        Action::PreparatoryTouch => "坯料加工",
+        Action::Groundwork => "坯料制作",
+        Action::DelicateSynthesis => "精密制作",
+        Action::IntensiveSynthesis => "集中制作",
+        Action::HeartAndSoul => "专心致志",
+        Action::PrudentSynthesis => "俭约制作",
+        Action::TrainedFinesse => "工匠的神技",
+        Action::ComboRefinedTouch => "洗練加工", // 7.0 Lv.92
+        Action::ImmaculateMend => "パーフェクトメンド", // 7.0 Lv.98
+        Action::TrainedPerfection => "匠の絶技", // 7.0 Lv.100
+        Action::TrainedEye => "工匠的神速技巧",
+        Action::QuickInnovation => "クイックイノベーション", // 7.0 Lv.96
     }
 }

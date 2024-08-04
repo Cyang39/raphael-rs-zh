@@ -29,6 +29,7 @@ pub fn import_item_records(
     import_item_names(&relevant_items, "de")?;
     import_item_names(&relevant_items, "fr")?;
     import_item_names(&relevant_items, "jp")?;
+    import_item_names(&relevant_items, "zh")?;
 
     Ok(())
 }

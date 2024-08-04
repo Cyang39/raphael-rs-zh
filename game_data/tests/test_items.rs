@@ -20,6 +20,7 @@ fn test_item_name_2341() {
         get_item_name(item_id, false, Locale::DE),
         get_item_name(item_id, false, Locale::FR),
         get_item_name(item_id, false, Locale::JP),
+        get_item_name(item_id, false, Locale::ZH),
     ];
     assert_eq!(
         item_names,
@@ -27,7 +28,8 @@ fn test_item_name_2341() {
             "Bronze Cross-pein Hammer",
             "Bronze-Kreuzschlaghammer", // "<SoftHyphen/>" should not appear in the item name
             "Marteau à panne croisée",
-            "クロスペインハンマー"
+            "クロスペインハンマー",
+            "青铜横头锤"
         ]
     );
 }
@@ -40,6 +42,7 @@ fn test_item_name_44232_hq() {
         get_item_name(item_id, true, Locale::DE),
         get_item_name(item_id, true, Locale::FR),
         get_item_name(item_id, true, Locale::JP),
+        get_item_name(item_id, true, Locale::ZH),
     ];
     assert_eq!(
         item_names,
@@ -47,7 +50,8 @@ fn test_item_name_44232_hq() {
             "Rarefied Tacos de Carne Asada (HQ)",
             "Tacos de Carne Asada (Sammlerstück) (HQ)",
             "Tacos de carne asada collectionnables (HQ)",
-            "収集用のタコス・カルネ・アサーダ (HQ)"
+            "収集用のタコス・カルネ・アサーダ (HQ)",
+            "収集用のタコス・カルネ・アサーダ (HQ)", // not in cn server, use jp name
         ]
     );
 }
