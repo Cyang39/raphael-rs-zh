@@ -1,23 +1,24 @@
 use std::cell::Cell;
-use std::panic;
 use std::rc::Rc;
 use std::time::Duration;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
-use egui::{Align, CursorIcon, FontData, FontDefinitions, FontFamily, Layout, TextStyle};
+use egui::{Align, CursorIcon, FontData, FontDefinitions, FontFamily, Id, Layout, TextStyle};
 use game_data::{
-    action_name, get_initial_quality, get_item_name, get_job_name, Consumable, Locale, ITEMS,
+    action_name, get_initial_quality, get_item_name, get_job_name, Consumable, Locale,
 };
-use simulator::{state::InProgress, Action, Settings};
 
-use crate::{
-    config::{CrafterConfig, QualitySource, QualityTarget, RecipeConfiguration},
-    widgets::{
-        ConsumableSelect, HelpText, MacroView, MacroViewConfig, RecipeSelect, Simulator, StatsEdit,
-    },
-};
+use simulator::Action;
+
+use crate::config::{CrafterConfig, QualitySource, QualityTarget, RecipeConfiguration};
+use crate::widgets::*;
+use crate::worker::BridgeType;
 
 fn load<T: DeserializeOwned>(cc: &eframe::CreationContext<'_>, key: &'static str, default: T) -> T {
     match cc.storage {
@@ -33,11 +34,12 @@ pub enum SolverEvent {
     FinalSolution(Vec<Action>),
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-struct SolverConfig {
-    quality_target: QualityTarget,
-    backload_progress: bool,
-    adversarial: bool,
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SolverConfig {
+    pub quality_target: QualityTarget,
+    pub backload_progress: bool,
+    pub adversarial: bool,
+    pub minimize_steps: bool,
 }
 
 pub struct MacroSolverApp {
@@ -49,34 +51,45 @@ pub struct MacroSolverApp {
     solver_config: SolverConfig,
     macro_view_config: MacroViewConfig,
 
-    custom_recipe: bool,
-    recipe_search_text: String,
-    food_search_text: String,
-    potion_search_text: String,
-
     stats_edit_window_open: bool,
     actions: Vec<Action>,
     solver_pending: bool,
     solver_progress: f32,
     start_time: Option<Instant>,
     duration: Option<Duration>,
-    bridge: gloo_worker::WorkerBridge<WebWorker>,
     data_update: Rc<Cell<Option<SolverEvent>>>,
+    bridge: BridgeType,
 }
 
 impl MacroSolverApp {
-    /// Called once before the first frame.
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    #[cfg(target_arch = "wasm32")]
+    fn initialize_bridge(
+        cc: &eframe::CreationContext<'_>,
+        data_update: &Rc<Cell<Option<SolverEvent>>>,
+    ) -> BridgeType {
         let ctx = cc.egui_ctx.clone();
-        let data_update = Rc::new(Cell::new(None));
         let sender = data_update.clone();
 
-        let bridge = <WebWorker as gloo_worker::Spawnable>::spawner()
+        <crate::worker::Worker as gloo_worker::Spawnable>::spawner()
             .callback(move |response| {
                 sender.set(Some(response));
                 ctx.request_repaint();
             })
-            .spawn(concat!("./webworker", env!("RANDOM_SUFFIX"), ".js"));
+            .spawn(concat!("./webworker", env!("RANDOM_SUFFIX"), ".js"))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn initialize_bridge(
+        _cc: &eframe::CreationContext<'_>,
+        _data_cell: &Rc<Cell<Option<SolverEvent>>>,
+    ) -> BridgeType {
+        BridgeType::new()
+    }
+
+    /// Called once before the first frame.
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let data_update = Rc::new(Cell::new(None));
+        let bridge = Self::initialize_bridge(cc, &data_update);
 
         cc.egui_ctx.set_pixels_per_point(1.2);
         cc.egui_ctx.style_mut(|style| {
@@ -101,11 +114,6 @@ impl MacroSolverApp {
             solver_config: load(cc, "SOLVER_CONFIG", Default::default()),
             macro_view_config: load(cc, "MACRO_VIEW_CONFIG", Default::default()),
 
-            custom_recipe: load(cc, "CUSTOM_RECIPE", false),
-            recipe_search_text: load(cc, "RECIPE_SEARCH_TEXT", Default::default()),
-            food_search_text: load(cc, "FOOD_SEARCH_TEXT", Default::default()),
-            potion_search_text: load(cc, "POTION_SEARCH_TEXT", Default::default()),
-
             stats_edit_window_open: false,
             actions: Vec::new(),
             solver_pending: false,
@@ -119,42 +127,9 @@ impl MacroSolverApp {
 }
 
 impl eframe::App for MacroSolverApp {
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, "LOCALE", &self.locale);
-        eframe::set_value(storage, "RECIPE_CONFIG", &self.recipe_config);
-        eframe::set_value(storage, "SELECTED_FOOD", &self.selected_food);
-        eframe::set_value(storage, "SELECTED_POTION", &self.selected_potion);
-        eframe::set_value(storage, "CRAFTER_CONFIG", &self.crafter_config);
-        eframe::set_value(storage, "SOLVER_CONFIG", &self.solver_config);
-        eframe::set_value(storage, "MACRO_VIEW_CONFIG", &self.macro_view_config);
-
-        eframe::set_value(storage, "CUSTOM_RECIPE", &self.custom_recipe);
-        eframe::set_value(storage, "RECIPE_SEARCH_TEXT", &self.recipe_search_text);
-        eframe::set_value(storage, "FOOD_SEARCH_TEXT", &self.food_search_text);
-        eframe::set_value(storage, "POTION_SEARCH_TEXT", &self.potion_search_text);
-    }
-
-    fn auto_save_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(1)
-    }
-
     /// Called each time the UI needs repainting, which may be many times per second.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if let Some(update) = self.data_update.take() {
-            match update {
-                SolverEvent::Progress(progress) => {
-                    self.solver_progress = progress;
-                }
-                SolverEvent::IntermediateSolution(actions) => {
-                    self.actions = actions;
-                }
-                SolverEvent::FinalSolution(actions) => {
-                    self.actions = actions;
-                    self.duration = Some(Instant::now() - self.start_time.unwrap());
-                    self.solver_pending = false;
-                }
-            }
-        }
+        self.solver_update();
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -247,6 +222,7 @@ impl eframe::App for MacroSolverApp {
                         ui.add(Simulator::new(
                             &game_settings,
                             initial_quality,
+                            self.solver_config,
                             &self.crafter_config,
                             &self.actions,
                             game_data::ITEMS
@@ -267,8 +243,6 @@ impl eframe::App for MacroSolverApp {
                                             &mut self.recipe_config,
                                             self.selected_food,
                                             self.selected_potion,
-                                            &mut self.custom_recipe,
-                                            &mut self.recipe_search_text,
                                             self.locale,
                                         ),
                                     );
@@ -280,12 +254,9 @@ impl eframe::App for MacroSolverApp {
                                     ui.set_max_height(172.0);
                                     ui.add_enabled(
                                         !self.solver_pending,
-                                        ConsumableSelect::new(
-                                            "Food",
+                                        FoodSelect::new(
                                             self.crafter_config.crafter_stats
                                                 [self.crafter_config.selected_job as usize],
-                                            game_data::MEALS,
-                                            &mut self.food_search_text,
                                             &mut self.selected_food,
                                             self.locale,
                                         ),
@@ -297,12 +268,9 @@ impl eframe::App for MacroSolverApp {
                                     ui.set_max_height(172.0);
                                     ui.add_enabled(
                                         !self.solver_pending,
-                                        ConsumableSelect::new(
-                                            "Potion",
+                                        PotionSelect::new(
                                             self.crafter_config.crafter_stats
                                                 [self.crafter_config.selected_job as usize],
-                                            game_data::POTIONS,
-                                            &mut self.potion_search_text,
                                             &mut self.selected_potion,
                                             self.locale,
                                         ),
@@ -341,9 +309,48 @@ impl eframe::App for MacroSolverApp {
             ui.add(StatsEdit::new(self.locale, &mut self.crafter_config));
         });
     }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, "LOCALE", &self.locale);
+        eframe::set_value(storage, "RECIPE_CONFIG", &self.recipe_config);
+        eframe::set_value(storage, "SELECTED_FOOD", &self.selected_food);
+        eframe::set_value(storage, "SELECTED_POTION", &self.selected_potion);
+        eframe::set_value(storage, "CRAFTER_CONFIG", &self.crafter_config);
+        eframe::set_value(storage, "SOLVER_CONFIG", &self.solver_config);
+        eframe::set_value(storage, "MACRO_VIEW_CONFIG", &self.macro_view_config);
+    }
+
+    fn auto_save_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(1)
+    }
 }
 
 impl MacroSolverApp {
+    fn solver_update(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(bridge_rx) = &self.bridge.rx {
+            if let Ok(update) = bridge_rx.try_recv() {
+                self.data_update.set(Some(update));
+            }
+        }
+
+        if let Some(update) = self.data_update.take() {
+            match update {
+                SolverEvent::Progress(progress) => {
+                    self.solver_progress = progress;
+                }
+                SolverEvent::IntermediateSolution(actions) => {
+                    self.actions = actions;
+                }
+                SolverEvent::FinalSolution(actions) => {
+                    self.actions = actions;
+                    self.duration = Some(Instant::now() - self.start_time.unwrap());
+                    self.solver_pending = false;
+                }
+            }
+        }
+    }
+
     fn draw_configuration_widget(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
@@ -428,7 +435,7 @@ impl MacroSolverApp {
             let recipe_ingredients = self.recipe_config.recipe.ingredients;
             if let QualitySource::HqMaterialList(provided_ingredients) = &mut self.recipe_config.quality_source {
                 for (index, ingredient) in recipe_ingredients.into_iter().enumerate() {
-                    if let Some(item) =  ITEMS.get(&ingredient.item_id) {
+                    if let Some(item) = game_data::ITEMS.get(&ingredient.item_id) {
                         if item.can_be_hq {
                             has_hq_ingredient = true;
                             ui.horizontal(|ui| {
@@ -455,7 +462,7 @@ impl MacroSolverApp {
             ui.separator();
 
             ui.label(egui::RichText::new("Actions").strong());
-            if self.crafter_config.active_stats().level as u32 >= Action::Manipulation.level_requirement() {
+            if self.crafter_config.active_stats().level >= Action::Manipulation.level_requirement() {
                 ui.add(egui::Checkbox::new(
                     &mut self.crafter_config.active_stats_mut().manipulation,
                     format!("Enable {}", action_name(Action::Manipulation, self.locale)),
@@ -466,7 +473,7 @@ impl MacroSolverApp {
                     egui::Checkbox::new(&mut false, format!("Enable {}", action_name(Action::Manipulation, self.locale))),
                 );
             }
-            if self.crafter_config.active_stats().level as u32 >= Action::HeartAndSoul.level_requirement() {
+            if self.crafter_config.active_stats().level >= Action::HeartAndSoul.level_requirement() {
                 ui.add(egui::Checkbox::new(&mut self.crafter_config.active_stats_mut().heart_and_soul, format!("Enable {}", action_name(Action::HeartAndSoul, self.locale))));
             } else {
                 ui.add_enabled(
@@ -474,7 +481,7 @@ impl MacroSolverApp {
                     egui::Checkbox::new(&mut false, format!("Enable {}", action_name(Action::HeartAndSoul, self.locale))),
                 );
             }
-            if self.crafter_config.active_stats().level as u32 >= Action::QuickInnovation.level_requirement() {
+            if self.crafter_config.active_stats().level >= Action::QuickInnovation.level_requirement() {
                 ui.add(egui::Checkbox::new(&mut self.crafter_config.active_stats_mut().quick_innovation, format!("Enable {}", action_name(Action::QuickInnovation, self.locale))));
             } else {
                 ui.add_enabled(
@@ -545,6 +552,7 @@ impl MacroSolverApp {
                         });
                 });
             });
+
             ui.horizontal(|ui| {
                 ui.checkbox(
                     &mut self.solver_config.backload_progress,
@@ -552,6 +560,7 @@ impl MacroSolverApp {
                 );
                 ui.add(HelpText::new("Find a rotation that only uses Progress-increasing actions at the end of the rotation.\n  ⊟ May decrease achievable Quality.\n  ⊟ May increase macro duration.\n  ⊞ Shorter solve-time."));
             });
+
             if self.recipe_config.recipe.is_expert {
                 self.solver_config.adversarial = false;
             }
@@ -563,6 +572,18 @@ impl MacroSolverApp {
                 ui.add(HelpText::new("Find a rotation that can reach the target quality no matter how unlucky the random conditions are.\n  ⊟ May decrease achievable Quality.\n  ⊟ May increase macro duration.\n  ⊟ Much longer solve-time."));
             });
             if self.solver_config.adversarial {
+                ui.label(
+                    egui::RichText::new("⚠ EXPERIMENTAL FEATURE\nMay crash the solver due to reaching the 4GB memory limit of 32-bit web assembly, causing the UI to get stuck in the \"solving\" state indefinitely.")
+                        .small()
+                        .color(ui.visuals().warn_fg_color),
+                );
+            }
+
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.solver_config.minimize_steps, "Minimize steps");
+                ui.add(HelpText::new("Guarantee shortest possible macro.\n  ⊟ Much longer solve-time."));
+            });
+            if self.solver_config.minimize_steps {
                 ui.label(
                     egui::RichText::new("⚠ EXPERIMENTAL FEATURE\nMay crash the solver due to reaching the 4GB memory limit of 32-bit web assembly, causing the UI to get stuck in the \"solving\" state indefinitely.")
                         .small()
@@ -594,9 +615,15 @@ impl MacroSolverApp {
                             QualitySource::HqMaterialList(hq_materials) => get_initial_quality(self.recipe_config.recipe, hq_materials),
                             QualitySource::Value(quality) => quality,
                         };
+
+                        ui.ctx().data_mut(|data| {
+                            data.insert_temp(Id::new("LAST_SOLVE_PARAMS"), (game_settings, initial_quality, self.solver_config));
+                        });
+
                         game_settings.max_quality = target_quality.saturating_sub(initial_quality);
-                        self.bridge
-                            .send((game_settings, self.solver_config.backload_progress));
+
+                        self.bridge.send((game_settings, self.solver_config));
+
                         log::debug!("{game_settings:?}");
                     }
                     if self.solver_pending {
@@ -647,52 +674,5 @@ impl MacroSolverApp {
             .unwrap()
             .push("chinese_monospace".to_owned());
         ctx.set_fonts(fonts);
-    }
-}
-
-pub struct WebWorker {}
-
-impl gloo_worker::Worker for WebWorker {
-    type Message = u64;
-    type Input = (Settings, bool);
-    type Output = SolverEvent;
-
-    fn create(_scope: &gloo_worker::WorkerScope<Self>) -> Self {
-        panic::set_hook(Box::new(console_error_panic_hook::hook));
-        Self {}
-    }
-
-    fn update(&mut self, _scope: &gloo_worker::WorkerScope<Self>, _msg: Self::Message) {}
-
-    fn received(
-        &mut self,
-        scope: &gloo_worker::WorkerScope<Self>,
-        msg: Self::Input,
-        id: gloo_worker::HandlerId,
-    ) {
-        let settings = msg.0;
-        let backload_progress = msg.1;
-
-        let solution_callback = move |actions: &[Action]| {
-            scope.respond(id, SolverEvent::IntermediateSolution(actions.to_vec()));
-        };
-        let progress_callback = move |progress: f32| {
-            scope.respond(id, SolverEvent::Progress(progress));
-        };
-
-        let final_solution = solvers::MacroSolver::new(
-            settings,
-            Box::new(solution_callback),
-            Box::new(progress_callback),
-        )
-        .solve(InProgress::new(&settings), backload_progress);
-        match final_solution {
-            Some(actions) => {
-                scope.respond(id, SolverEvent::FinalSolution(actions));
-            }
-            None => {
-                scope.respond(id, SolverEvent::FinalSolution(Vec::new()));
-            }
-        }
     }
 }
