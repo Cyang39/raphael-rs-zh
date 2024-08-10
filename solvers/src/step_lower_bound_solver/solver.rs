@@ -1,76 +1,80 @@
-use crate::{
-    actions::{PROGRESS_ACTIONS, QUALITY_ACTIONS},
-    utils::{ParetoFrontBuilder, ParetoValue},
-};
-use simulator::{Action, ActionMask, Condition, Settings, SimulationState, SingleUse};
+use crate::utils::{ParetoFrontBuilder, ParetoValue};
+use simulator::{Condition, Settings, SimulationState};
 
 use rustc_hash::FxHashMap as HashMap;
 
-use super::state::ReducedState;
+use super::state::{ReducedState, ReducedStateWithDurability, ReducedStateWithoutDurability};
 
-const SEARCH_ACTIONS: ActionMask = PROGRESS_ACTIONS
-    .union(QUALITY_ACTIONS)
-    .add(Action::TrainedPerfection);
-
-pub struct UpperBoundSolver {
+pub struct StepLowerBoundSolver {
     settings: Settings,
-    base_durability_cost: i16,
-    waste_not_cost: i16,
-    solved_states: HashMap<ReducedState, Box<[ParetoValue<u16, u16>]>>,
+    fast_solver: StepLowerBoundSolverImpl<ReducedStateWithoutDurability>,
+    slow_solver: StepLowerBoundSolverImpl<ReducedStateWithDurability>,
+}
+
+impl StepLowerBoundSolver {
+    pub fn new(settings: Settings) -> Self {
+        Self {
+            settings,
+            fast_solver: StepLowerBoundSolverImpl::new(settings),
+            slow_solver: StepLowerBoundSolverImpl::new(settings),
+        }
+    }
+
+    /// Returns a lower-bound on the additional steps required to max out both Progress and Quality from this state.
+    pub fn step_lower_bound(&mut self, state: SimulationState, fast_mode: bool) -> u8 {
+        let mut lo = 0;
+        let mut hi = 1;
+        while self.fast_solver.quality_upper_bound(state, hi) < self.settings.max_quality {
+            lo = hi;
+            hi *= 2;
+        }
+        while lo + 1 < hi {
+            if self.fast_solver.quality_upper_bound(state, (lo + hi) / 2)
+                < self.settings.max_quality
+            {
+                lo = (lo + hi) / 2;
+            } else {
+                hi = (lo + hi) / 2;
+            }
+        }
+        if fast_mode {
+            return hi;
+        }
+        while self.slow_solver.quality_upper_bound(state, hi) < self.settings.max_quality {
+            hi += 1;
+        }
+        hi
+    }
+}
+
+struct StepLowerBoundSolverImpl<S: ReducedState> {
+    settings: Settings,
+    solved_states: HashMap<S, Box<[ParetoValue<u16, u16>]>>,
     pareto_front_builder: ParetoFrontBuilder<u16, u16>,
 }
 
-impl UpperBoundSolver {
+impl<S: ReducedState> StepLowerBoundSolverImpl<S> {
     pub fn new(settings: Settings) -> Self {
-        dbg!(std::mem::size_of::<ReducedState>());
-        dbg!(std::mem::align_of::<ReducedState>());
-        let mut durability_cost = Action::MasterMend.cp_cost() / 6;
-        if settings.allowed_actions.has(Action::Manipulation) {
-            durability_cost = std::cmp::min(durability_cost, Action::Manipulation.cp_cost() / 8);
-        }
-        if settings.allowed_actions.has(Action::ImmaculateMend) {
-            durability_cost = std::cmp::min(
-                durability_cost,
-                Action::ImmaculateMend.cp_cost() / (settings.max_durability as i16 / 5 - 1),
-            );
-        }
-        UpperBoundSolver {
-            settings,
-            base_durability_cost: durability_cost,
-            waste_not_cost: if settings.allowed_actions.has(Action::WasteNot2) {
-                Action::WasteNot2.cp_cost() / 8
-            } else {
-                Action::WasteNot.cp_cost() / 4
+        dbg!(std::mem::size_of::<S>());
+        dbg!(std::mem::align_of::<S>());
+        Self {
+            settings: Settings {
+                allowed_actions: S::optimize_action_mask(settings.allowed_actions),
+                ..settings
             },
             solved_states: HashMap::default(),
             pareto_front_builder: ParetoFrontBuilder::new(
                 settings.max_progress,
-                settings.max_quality.saturating_mul(2),
+                settings.max_quality,
             ),
         }
     }
 
-    /// Returns an upper-bound on the maximum Quality achievable from this state while also maxing out Progress.
-    /// The returned upper-bound is clamped to 2 times settings.max_quality.
-    /// There is no guarantee on the tightness of the upper-bound.
-    pub fn quality_upper_bound(&mut self, mut state: SimulationState) -> u16 {
+    pub fn quality_upper_bound(&mut self, state: SimulationState, step_budget: u8) -> u16 {
         let current_quality = state.get_quality();
         let missing_progress = self.settings.max_progress.saturating_sub(state.progress);
 
-        // refund effects and durability
-        state.cp += state.effects.manipulation() as i16 * (Action::Manipulation.cp_cost() / 8);
-        state.cp += state.effects.waste_not() as i16 * self.waste_not_cost;
-        state.cp += state.durability as i16 / 5 * self.base_durability_cost;
-        if state.effects.trained_perfection() != SingleUse::Unavailable
-            && self.settings.allowed_actions.has(Action::TrainedPerfection)
-        {
-            state.effects.set_trained_perfection(SingleUse::Unavailable);
-            state.cp += 4 * self.base_durability_cost;
-        }
-        state.durability = i8::MAX;
-
-        let reduced_state =
-            ReducedState::from_state(state, self.base_durability_cost, self.waste_not_cost);
+        let reduced_state = ReducedState::from_state(state, step_budget);
 
         if !self.solved_states.contains_key(&reduced_state) {
             self.solve_state(reduced_state);
@@ -98,13 +102,35 @@ impl UpperBoundSolver {
         )
     }
 
-    fn solve_state(&mut self, state: ReducedState) {
+    fn solve_state(&mut self, reduced_state: S) {
         self.pareto_front_builder.push_empty();
-        for action in SEARCH_ACTIONS
-            .intersection(self.settings.allowed_actions)
-            .actions_iter()
-        {
-            self.build_child_front(state, action);
+        let full_state = reduced_state.to_state();
+        for action in self.settings.allowed_actions.actions_iter() {
+            if let Ok(new_full_state) =
+                full_state.use_action(action, Condition::Normal, &self.settings)
+            {
+                let action_progress = new_full_state.progress;
+                let action_quality = new_full_state.get_quality();
+                let new_reduced_state =
+                    S::from_state(new_full_state, reduced_state.steps_budget() - 1);
+                if new_reduced_state.steps_budget() != 0 && !new_full_state.is_final(&self.settings)
+                {
+                    match self.solved_states.get(&new_reduced_state) {
+                        Some(pareto_front) => self.pareto_front_builder.push(pareto_front),
+                        None => self.solve_state(new_reduced_state),
+                    }
+                    self.pareto_front_builder.map(move |value| {
+                        value.first += action_progress;
+                        value.second += action_quality;
+                    });
+                    self.pareto_front_builder.merge();
+                } else if action_progress != 0 {
+                    // last action must be a progress increase
+                    self.pareto_front_builder
+                        .push(&[ParetoValue::new(action_progress, action_quality)]);
+                    self.pareto_front_builder.merge();
+                }
+            }
             if self.pareto_front_builder.is_max() {
                 // stop early if both Progress and Quality are maxed out
                 // this optimization would work even better with better action ordering
@@ -113,49 +139,20 @@ impl UpperBoundSolver {
             }
         }
         let pareto_front = self.pareto_front_builder.peek().unwrap();
-        self.solved_states.insert(state, pareto_front);
-    }
-
-    fn build_child_front(&mut self, state: ReducedState, action: Action) {
-        if let Ok(new_state) =
-            SimulationState::from(state).use_action(action, Condition::Normal, &self.settings)
-        {
-            let action_progress = new_state.progress;
-            let action_quality = new_state.get_quality();
-            let new_state =
-                ReducedState::from_state(new_state, self.base_durability_cost, self.waste_not_cost);
-            if new_state.cp > 0 {
-                match self.solved_states.get(&new_state) {
-                    Some(pareto_front) => self.pareto_front_builder.push(pareto_front),
-                    None => self.solve_state(new_state),
-                }
-                self.pareto_front_builder.map(move |value| {
-                    value.first += action_progress;
-                    value.second += action_quality;
-                });
-                self.pareto_front_builder.merge();
-            }
-            if new_state.cp + self.base_durability_cost >= 0 && action_progress != 0 {
-                // "durability" must not go lower than -5
-                // last action must be a progress increase
-                self.pareto_front_builder
-                    .push(&[ParetoValue::new(action_progress, action_quality)]);
-                self.pareto_front_builder.merge();
-            }
-        }
+        self.solved_states.insert(reduced_state, pareto_front);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use rand::Rng;
-    use simulator::{Combo, Effects, SimulationState};
+    use simulator::{Action, ActionMask, Combo, Effects, SimulationState};
 
     use super::*;
 
-    fn solve(settings: Settings, actions: &[Action]) -> u16 {
+    fn solve(settings: Settings, actions: &[Action]) -> u8 {
         let state = SimulationState::from_macro(&settings, actions).unwrap();
-        let result = UpperBoundSolver::new(settings).quality_upper_bound(state.try_into().unwrap());
+        let result = StepLowerBoundSolver::new(settings).step_lower_bound(state, false);
         dbg!(result);
         result
     }
@@ -166,7 +163,7 @@ mod tests {
             max_cp: 553,
             max_durability: 70,
             max_progress: 2400,
-            max_quality: 20000,
+            max_quality: 1700,
             base_progress: 100,
             base_quality: 100,
             job_level: 90,
@@ -190,7 +187,7 @@ mod tests {
                 Action::PreparatoryTouch,
             ],
         );
-        assert_eq!(result, 3485);
+        assert_eq!(result, 5);
     }
 
     #[test]
@@ -199,7 +196,7 @@ mod tests {
             max_cp: 553,
             max_durability: 70,
             max_progress: 2400,
-            max_quality: 20000,
+            max_quality: 1700,
             base_progress: 100,
             base_quality: 100,
             job_level: 90,
@@ -223,7 +220,7 @@ mod tests {
                 Action::PreparatoryTouch,
             ],
         );
-        assert_eq!(result, 3375);
+        assert_eq!(result, 6);
     }
 
     #[test]
@@ -253,7 +250,7 @@ mod tests {
                 Action::Groundwork,
             ],
         );
-        assert_eq!(result, 4767);
+        assert_eq!(result, 14);
     }
 
     #[test]
@@ -283,7 +280,7 @@ mod tests {
                 Action::Groundwork,
             ],
         );
-        assert_eq!(result, 4767);
+        assert_eq!(result, 14);
     }
 
     #[test]
@@ -318,7 +315,7 @@ mod tests {
                 Action::ComboStandardTouch,
             ],
         );
-        assert_eq!(result, 4053);
+        assert_eq!(result, 13);
     }
 
     #[test]
@@ -353,7 +350,7 @@ mod tests {
                 Action::ComboStandardTouch,
             ],
         );
-        assert_eq!(result, 3953);
+        assert_eq!(result, 13);
     }
 
     #[test]
@@ -373,7 +370,7 @@ mod tests {
             adversarial: false,
         };
         let result = solve(settings, &[Action::MuscleMemory]);
-        assert_eq!(result, 2220);
+        assert_eq!(result, 18);
     }
 
     #[test]
@@ -382,7 +379,7 @@ mod tests {
             max_cp: 411,
             max_durability: 60,
             max_progress: 1990,
-            max_quality: 5000,
+            max_quality: 2900,
             base_progress: 100,
             base_quality: 100,
             job_level: 90,
@@ -393,7 +390,7 @@ mod tests {
             adversarial: true,
         };
         let result = solve(settings, &[Action::MuscleMemory]);
-        assert_eq!(result, 2220);
+        assert_eq!(result, 14);
     }
 
     #[test]
@@ -413,7 +410,7 @@ mod tests {
             adversarial: false,
         };
         let result = solve(settings, &[Action::MuscleMemory]);
-        assert_eq!(result, 2604);
+        assert_eq!(result, 12);
     }
 
     #[test]
@@ -433,7 +430,7 @@ mod tests {
             adversarial: true,
         };
         let result = solve(settings, &[Action::MuscleMemory]);
-        assert_eq!(result, 2604);
+        assert_eq!(result, 12);
     }
 
     #[test]
@@ -442,7 +439,7 @@ mod tests {
             max_cp: 673,
             max_durability: 60,
             max_progress: 2345,
-            max_quality: 8000,
+            max_quality: 3500,
             base_progress: 100,
             base_quality: 100,
             job_level: 90,
@@ -453,7 +450,7 @@ mod tests {
             adversarial: false,
         };
         let result = solve(settings, &[Action::MuscleMemory]);
-        assert_eq!(result, 4555);
+        assert_eq!(result, 16);
     }
 
     #[test]
@@ -462,7 +459,7 @@ mod tests {
             max_cp: 673,
             max_durability: 60,
             max_progress: 2345,
-            max_quality: 8000,
+            max_quality: 1200,
             base_progress: 100,
             base_quality: 100,
             job_level: 90,
@@ -473,7 +470,7 @@ mod tests {
             adversarial: true,
         };
         let result = solve(settings, &[Action::MuscleMemory]);
-        assert_eq!(result, 4555);
+        assert_eq!(result, 11);
     }
 
     #[test]
@@ -482,7 +479,7 @@ mod tests {
             max_cp: 673,
             max_durability: 60,
             max_progress: 2345,
-            max_quality: 8000,
+            max_quality: 3123,
             base_progress: 100,
             base_quality: 100,
             job_level: 90,
@@ -493,7 +490,7 @@ mod tests {
             adversarial: false,
         };
         let result = solve(settings, &[Action::Reflect]);
-        assert_eq!(result, 4633);
+        assert_eq!(result, 15);
     }
 
     #[test]
@@ -513,7 +510,7 @@ mod tests {
             adversarial: false,
         };
         let result = solve(settings, &[Action::PrudentTouch]);
-        assert_eq!(result, 10000);
+        assert_eq!(result, 1);
     }
 
     #[test]
@@ -522,7 +519,7 @@ mod tests {
             max_cp: 700,
             max_durability: 70,
             max_progress: 2500,
-            max_quality: 40000,
+            max_quality: 3000,
             base_progress: 100,
             base_quality: 100,
             job_level: 90,
@@ -534,7 +531,7 @@ mod tests {
             adversarial: false,
         };
         let result = solve(settings, &[]);
-        assert_eq!(result, 4823);
+        assert_eq!(result, 16);
     }
 
     #[test]
@@ -543,7 +540,7 @@ mod tests {
             max_cp: 400,
             max_durability: 80,
             max_progress: 1200,
-            max_quality: 24000,
+            max_quality: 2400,
             base_progress: 100,
             base_quality: 100,
             job_level: 100,
@@ -555,7 +552,7 @@ mod tests {
             adversarial: false,
         };
         let result = solve(settings, &[]);
-        assert_eq!(result, 4269);
+        assert_eq!(result, 11);
     }
 
     #[test]
@@ -564,7 +561,7 @@ mod tests {
             max_cp: 320,
             max_durability: 80,
             max_progress: 1600,
-            max_quality: 24000,
+            max_quality: 2000,
             base_progress: 100,
             base_quality: 100,
             job_level: 100,
@@ -576,7 +573,7 @@ mod tests {
             adversarial: false,
         };
         let result = solve(settings, &[]);
-        assert_eq!(result, 3035);
+        assert_eq!(result, 11);
     }
 
     #[test]
@@ -585,7 +582,7 @@ mod tests {
             max_cp: 320,
             max_durability: 80,
             max_progress: 1600,
-            max_quality: 24000,
+            max_quality: 2100,
             base_progress: 100,
             base_quality: 100,
             job_level: 100,
@@ -596,7 +593,7 @@ mod tests {
             adversarial: false,
         };
         let result = solve(settings, &[]);
-        assert_eq!(result, 24260);
+        assert_eq!(result, 5);
     }
 
     fn random_effects(adversarial: bool) -> Effects {
@@ -632,24 +629,38 @@ mod tests {
     /// Test that the upper-bound solver is monotonic,
     /// i.e. the quality UB of a state is never less than the quality UB of any of its children.
     fn monotonic_fuzz_check(settings: Settings) {
-        let mut solver = UpperBoundSolver::new(settings);
+        let mut solver = StepLowerBoundSolver::new(settings);
         for _ in 0..10000 {
+            let fast_mode: bool = rand::random();
             let state = random_state(&settings);
-            let state_upper_bound = solver.quality_upper_bound(state);
+            let state_lower_bound = solver.step_lower_bound(state, fast_mode);
             for action in settings.allowed_actions.actions_iter() {
-                let child_upper_bound = match state.use_action(action, Condition::Normal, &settings)
+                let child_lower_bound = match state.use_action(action, Condition::Normal, &settings)
                 {
                     Ok(child) => match child.is_final(&settings) {
-                        false => solver.quality_upper_bound(child),
-                        true if child.progress >= settings.max_progress => child.get_quality(),
-                        true => 0,
+                        false => solver.step_lower_bound(child, fast_mode),
+                        true if child.progress >= settings.max_progress
+                            && child.get_quality() >= settings.max_quality =>
+                        {
+                            0
+                        }
+                        true => u8::MAX,
                     },
-                    Err(_) => 0,
+                    Err(_) => u8::MAX,
                 };
-                if state_upper_bound < child_upper_bound {
-                    dbg!(state, action, state_upper_bound, child_upper_bound);
-                    panic!("Parent's upper bound is less than child's upper bound");
+                if state_lower_bound > child_lower_bound.saturating_add(1) {
+                    dbg!(state, action, state_lower_bound, child_lower_bound);
+                    panic!("Parent's step lower bound is greater than child's step lower bound");
                 }
+            }
+        }
+        for _ in 0..10000 {
+            let state = random_state(&settings);
+            let fast_mode_lower_bound = solver.step_lower_bound(state, true);
+            let slow_mode_lower_bound = solver.step_lower_bound(state, false);
+            if fast_mode_lower_bound > slow_mode_lower_bound {
+                dbg!(state, fast_mode_lower_bound, slow_mode_lower_bound);
+                panic!("Slow mode must be at least as tight as fast mode");
             }
         }
     }
@@ -660,7 +671,7 @@ mod tests {
             max_cp: 360,
             max_durability: 70,
             max_progress: 1000,
-            max_quality: 20000,
+            max_quality: 2600,
             base_progress: 100,
             base_quality: 100,
             job_level: 100,
@@ -676,7 +687,7 @@ mod tests {
             max_cp: 360,
             max_durability: 70,
             max_progress: 1000,
-            max_quality: 20000,
+            max_quality: 2400,
             base_progress: 100,
             base_quality: 100,
             job_level: 100,

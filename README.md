@@ -46,5 +46,5 @@ To build and host the application locally:
 ```
 export RANDOM_SUFFIX=""
 export RUSTFLAGS="--cfg=web_sys_unstable_apis"
-trunk serve --release --dist docs
+trunk serve --release --dist distrib
 ```
